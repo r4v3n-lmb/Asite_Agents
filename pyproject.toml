@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asite-agent-workflow"
+version = "0.1.0"
+description = "Agentic support workflow for Gendesk + Asite API"
+requires-python = ">=3.10"
+dependencies = [
+  "pypdf==6.9.2",
+  "Flask==3.1.1",
+]
+
+[project.scripts]
+asite-agent = "asite_agent.main:main"
+asite-dashboard = "asite_agent.dashboard:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

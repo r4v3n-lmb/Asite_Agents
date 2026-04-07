@@ -1,0 +1,3 @@
+[console_scripts]
+asite-agent = asite_agent.main:main
+asite-dashboard = asite_agent.dashboard:main

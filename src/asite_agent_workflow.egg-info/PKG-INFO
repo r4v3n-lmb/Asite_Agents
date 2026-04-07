@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: asite-agent-workflow
+Version: 0.1.0
+Summary: Agentic support workflow for Gendesk + Asite API
+Requires-Python: >=3.10
+Requires-Dist: pypdf==6.9.2
+Requires-Dist: Flask==3.1.1
