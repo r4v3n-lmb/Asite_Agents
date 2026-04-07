@@ -22,6 +22,7 @@ class Settings:
     gendesk_ticket_update_path_template: str
     gendesk_ticket_list_path: str
     gendesk_ticket_list_limit: int
+    gendesk_cookie: str
     asite_login_url: str
     asite_email: str
     asite_password: str
@@ -54,6 +55,7 @@ class Settings:
                 "GENDESK_TICKET_LIST_PATH", "/api/v2/tickets.json?per_page=25&sort_by=updated_at"
             ),
             gendesk_ticket_list_limit=int(os.getenv("GENDESK_TICKET_LIST_LIMIT", "25")),
+            gendesk_cookie=os.getenv("GENDESK_COOKIE", ""),
             asite_login_url=os.getenv("ASITE_LOGIN_URL", ""),
             asite_email=os.getenv("ASITE_EMAIL", ""),
             asite_password=os.getenv("ASITE_PASSWORD", ""),

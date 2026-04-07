@@ -54,6 +54,7 @@ Copy-Item .env.example .env
 - `GENDESK_TICKET_UPDATE_PATH_TEMPLATE`
 - `GENDESK_TICKET_LIST_PATH`
 - `GENDESK_TICKET_LIST_LIMIT`
+- `GENDESK_COOKIE` (optional; use only if your API requires a session cookie)
 - `ASITE_LOGIN_URL`
 - `ASITE_EMAIL`
 - `ASITE_PASSWORD`

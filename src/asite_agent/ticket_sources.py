@@ -24,6 +24,7 @@ class GendeskClient:
         ticket_get_path_template: str = "/api/v2/tickets/{ticket_id}.json",
         ticket_update_path_template: str = "/api/v2/tickets/{ticket_id}.json",
         ticket_list_path: str = "/api/v2/tickets.json?per_page=25&sort_by=updated_at",
+        cookie: str = "",
         email: str = "",
     ) -> None:
         self.base_url = base_url.rstrip("/")
@@ -33,6 +34,7 @@ class GendeskClient:
         self.ticket_get_path_template = ticket_get_path_template
         self.ticket_update_path_template = ticket_update_path_template
         self.ticket_list_path = ticket_list_path
+        self.cookie = cookie
         self.email = email
 
     def _request(self, path: str, method: str = "GET", payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -47,6 +49,8 @@ class GendeskClient:
             if prefix and not prefix.endswith(" "):
                 prefix = f"{prefix} "
             headers[self.auth_header] = f"{prefix}{self.api_key}".strip()
+        if self.cookie:
+            headers["Cookie"] = self.cookie
 
         body = None
         if payload is not None:

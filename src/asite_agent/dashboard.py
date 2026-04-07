@@ -723,6 +723,7 @@ def main() -> None:
         ticket_get_path_template=settings.gendesk_ticket_get_path_template,
         ticket_update_path_template=settings.gendesk_ticket_update_path_template,
         ticket_list_path=settings.gendesk_ticket_list_path,
+        cookie=settings.gendesk_cookie,
     )
     asite = AsiteClient(
         login_url_template=settings.asite_login_url,
