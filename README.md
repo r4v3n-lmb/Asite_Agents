@@ -86,6 +86,7 @@ Then open:
 Dashboard features:
 - Auto-poll Gendesk inbox (default every 20 seconds in UI)
 - One-click "Analyze" from inbox tickets
+- Inbox debug panel to inspect raw Gendesk response shape and parsing
 - Analyze ticket by ID (steps 1-3)
 - See proposed action + target Asite URI
 - Approve or deny from UI (step 4)

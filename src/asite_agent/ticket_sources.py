@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -52,8 +53,16 @@ class GendeskClient:
             body = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url=url, method=method, headers=headers, data=body)
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw)
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="ignore")
+            snippet = raw[:700].replace("\n", " ")
+            raise RuntimeError(f"Gendesk HTTP {exc.code} on {path}: {snippet}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Gendesk connection error on {path}: {exc.reason}") from exc
 
     def get_ticket(self, ticket_id: int) -> Ticket:
         payload = self._request(self.ticket_get_path_template.format(ticket_id=ticket_id))
@@ -70,13 +79,30 @@ class GendeskClient:
 
     def list_tickets(self, limit: int = 25) -> list[Ticket]:
         payload = self._request(self.ticket_list_path)
-        rows = (
+        rows: Any = (
             payload.get("tickets")
             or payload.get("items")
             or payload.get("data")
             or payload.get("results")
             or []
         )
+        if isinstance(rows, dict):
+            rows = (
+                rows.get("tickets")
+                or rows.get("items")
+                or rows.get("results")
+                or rows.get("data")
+                or []
+            )
+        if not isinstance(rows, list):
+            rows = []
+        # Fallback: scan top-level payload for first list of dicts with ids.
+        if not rows:
+            for value in payload.values():
+                if isinstance(value, list) and value and isinstance(value[0], dict):
+                    if "id" in value[0]:
+                        rows = value
+                        break
         tickets: list[Ticket] = []
         for row in rows[:limit]:
             tickets.append(
@@ -91,6 +117,22 @@ class GendeskClient:
                 )
             )
         return tickets
+
+    def inbox_debug(self, limit: int = 5) -> dict[str, Any]:
+        payload = self._request(self.ticket_list_path)
+        keys = sorted(payload.keys()) if isinstance(payload, dict) else []
+        preview = payload
+        if isinstance(payload, dict):
+            # keep output compact for dashboard visibility
+            preview = {k: payload[k] for k in list(payload.keys())[:6]}
+        tickets = self.list_tickets(limit=limit)
+        return {
+            "path": self.ticket_list_path,
+            "top_level_keys": keys,
+            "parsed_ticket_count": len(tickets),
+            "parsed_ticket_ids": [t.id for t in tickets],
+            "preview": preview,
+        }
 
     def add_internal_note(self, ticket_id: int, message: str) -> None:
         # Default payload follows Zendesk-compatible format and can be changed later

@@ -243,6 +243,9 @@ class DashboardState:
         tickets = self.workflow.gendesk.list_tickets(limit=self.inbox_limit)
         return [asdict(t) for t in tickets]
 
+    def inbox_debug(self) -> dict[str, Any]:
+        return self.workflow.gendesk.inbox_debug(limit=5)
+
     def history(self, limit: int = 200) -> list[dict[str, Any]]:
         if not self.audit_path.exists():
             return []
@@ -275,53 +278,78 @@ button{background:#2f4858;color:#fff;border:0;border-radius:6px}
 DASHBOARD_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Asite Agent Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-:root{--ink:#121212;--sand:#f4efe6;--signal:#1f7a5a;--warn:#c73e1d;--steel:#40526a;--card:#fffaf1}
-*{box-sizing:border-box}body{margin:0;font-family:"IBM Plex Sans","Segoe UI",sans-serif;color:var(--ink);background:var(--sand)}
-.wrap{max-width:1100px;margin:0 auto;padding:24px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.card{background:var(--card);border:1px solid #d8d0c2;border-radius:14px;padding:16px;margin-bottom:16px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}button,input{padding:10px;border-radius:8px;border:1px solid #bdb4a2}
-button{cursor:pointer}.primary{background:var(--steel);color:#fff}.ok{background:var(--signal);color:#fff}.no{background:var(--warn);color:#fff}
-.item{border:1px solid #d8d0c2;border-radius:12px;padding:12px;margin-top:10px;background:#fffdf8}.muted{color:#666;font-size:12px}
-.status{display:inline-block;padding:2px 8px;border-radius:999px;background:#ece7dc;font-size:12px}pre{background:#0f1720;color:#d6e2f0;padding:10px;border-radius:8px;max-height:200px;overflow:auto}
-@media (max-width:900px){.grid{grid-template-columns:1fr}}
+:root{--bg:#0e0e0e;--surface-low:#131313;--surface:#191a1a;--surface-hi:#252626;--on:#e7e5e5;--muted:#acabaa;--primary:#7bd0ff;--primary-container:#004c69;--error:#bb5551;--ghost:#484848}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(1200px 600px at 100% -20%,#113244 0%,transparent 60%),var(--bg);color:var(--on);font-family:"Inter",sans-serif}
+.top{height:64px;display:flex;align-items:center;gap:14px;padding:0 22px;background:rgba(14,14,14,.94);position:sticky;top:0;z-index:10}
+.brand{font-weight:800;letter-spacing:-.03em;font-size:22px}.brand span{color:var(--primary)}
+.layout{display:grid;grid-template-columns:250px 1fr;min-height:calc(100vh - 64px)}aside{background:var(--surface-low);padding:18px 14px}
+.nav{display:grid;gap:8px;margin-top:12px}.nav a{color:var(--muted);text-decoration:none;padding:10px 12px;border-radius:12px;background:transparent}.nav a.active{color:var(--on);background:var(--surface)}
+main{padding:20px;display:grid;gap:16px}.grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}.card{background:var(--surface);padding:16px;border-radius:16px}
+.card.soft{background:var(--surface-low)}.glass{background:rgba(37,38,38,.7);backdrop-filter:blur(12px)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.sp{flex:1}.muted{color:var(--muted);font-size:12px}
+input,select,button{font:inherit;padding:10px 12px;border-radius:10px;border:0;outline:none}
+input,select{background:var(--surface-hi);color:var(--on);min-width:120px}
+button{cursor:pointer;background:var(--surface-hi);color:var(--on)}
+.primary{background:linear-gradient(135deg,var(--primary) 0%,var(--primary-container) 100%);color:#d8f2ff;font-weight:700}
+.ok{background:#1b4f3c;color:#d9f3e7}.no{background:#6d2523;color:#ffd8d6}.warn{background:#3d341d;color:#ffdc9a}
+.item{background:var(--surface-hi);border-radius:12px;padding:12px;margin-top:10px}
+.status{display:inline-block;padding:2px 9px;border-radius:999px;background:rgba(72,72,72,.3);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.err{padding:10px;border-radius:10px;background:rgba(127,41,39,.45);color:#ffb5af;margin-top:8px}
+pre{background:#0b0b0b;color:#b8d8ea;padding:10px;border-radius:10px;max-height:210px;overflow:auto;font-size:12px}
+a{color:var(--primary)}
+@media (max-width:1060px){.layout{grid-template-columns:1fr}aside{display:none}.grid{grid-template-columns:1fr}}
 </style></head><body>
-<div class="wrap">
-<div class="row"><h1 style="margin:0;flex:1">Asite Agent Approval Dashboard</h1><div class="muted">User: {{username}} ({{role}})</div><a href="/logout">Logout</a></div>
-{% if role == "admin" %}
-<section class="card">
-<h2>User Access</h2>
-<div class="row">
-<input id="newUsername" placeholder="New username"/>
-<input id="newPassword" placeholder="Temp password (min 10 chars)" type="password"/>
-<select id="newRole"><option value="operator">operator</option><option value="admin">admin</option></select>
-<button class="primary" onclick="createUser()">Create User</button>
-</div>
-<div id="users"></div>
-</section>
-{% endif %}
-<section class="card">
-<h2>Gendesk Inbox</h2>
-<div class="row"><button class="primary" onclick="loadInbox()">Refresh Inbox</button><label><input type="checkbox" id="postNote" checked/> Post note back</label></div>
-<div id="inbox"></div>
-</section>
-<div class="grid">
-<section class="card"><h2>Create Request</h2><div class="row"><input id="ticketId" type="number" placeholder="Ticket ID"/><button class="primary" onclick="analyze()">Analyze Ticket</button></div></section>
-<section class="card"><h2>History</h2><button onclick="loadHistory()">Refresh History</button><div id="history"></div></section>
-</div>
-<section class="card"><h2>Requests</h2><button onclick="loadRequests()">Refresh Requests</button><div id="requests"></div></section>
-</div>
+<header class="top"><div class="brand">Midnight <span>Architect</span></div><div class="muted">Asite Control Plane</div><div class="sp"></div><div class="muted">User: {{username}} ({{role}})</div><a href="/logout">Logout</a></header>
+<div class="layout">
+<aside><div class="muted" style="letter-spacing:.2em;text-transform:uppercase">Admin Console</div><nav class="nav"><a class="active" href="#">Overview</a><a href="#">Helpdesk</a><a href="#">Actions</a><a href="#">History</a></nav></aside>
+<main>
+  <section class="grid">
+    <div class="card soft">
+      <div class="row"><h2 style="margin:0">Helpdesk Tickets</h2><span class="sp"></span><button class="primary" onclick="loadInbox()">Refresh</button><button class="warn" onclick="loadInboxDebug()">Debug Pull</button><label class="muted"><input type="checkbox" id="postNote" checked/> Post note back</label></div>
+      <div class="muted">If the list is empty, click <b>Debug Pull</b> to inspect auth/path/response shape.</div>
+      <div id="inboxErr"></div><div id="inbox"></div>
+    </div>
+    <div class="card glass">
+      <h2 style="margin:0 0 10px">Run Analysis</h2>
+      <div class="row"><input id="ticketId" type="number" placeholder="Ticket ID"/><button class="primary" onclick="analyze()">Analyze</button></div>
+      <div id="actionErr"></div>
+      <h3 style="margin:14px 0 6px">Request History</h3><div id="history"></div>
+    </div>
+  </section>
+  {% if role == "admin" %}
+  <section class="card">
+    <h2 style="margin:0 0 8px">User Access</h2>
+    <div class="row"><input id="newUsername" placeholder="New username"/><input id="newPassword" type="password" placeholder="Temp password (min 10 chars)"/><select id="newRole"><option value="operator">operator</option><option value="admin">admin</option></select><button class="primary" onclick="createUser()">Create User</button></div>
+    <div id="userErr"></div><div id="users"></div>
+  </section>
+  {% endif %}
+  <section class="card soft">
+    <div class="row"><h2 style="margin:0">Action Requests</h2><span class="sp"></span><button class="primary" onclick="loadRequests()">Refresh</button></div>
+    <div id="reqErr"></div><div id="requests"></div>
+  </section>
+</main></div>
 <script>
-async function api(path, method="GET", body=null){const resp=await fetch(path,{method,headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):null}); if(!resp.ok){throw new Error(await resp.text())} return await resp.json();}
+async function api(path, method="GET", body=null){
+  const resp=await fetch(path,{method,headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):null});
+  const raw=await resp.text();
+  let data={}; try{ data=raw?JSON.parse(raw):{} }catch(_){ data={raw} }
+  if(!resp.ok){ throw new Error((data.error||raw||("HTTP "+resp.status)).toString()) }
+  return data;
+}
 function esc(s){return (s||"").toString().replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))}
-async function analyze(){const ticketId=parseInt(document.getElementById("ticketId").value,10); if(!ticketId){alert("Enter ticket id");return;} const post_note=document.getElementById("postNote").checked; await api("/api/requests","POST",{ticket_id:ticketId,post_note}); await loadRequests();}
+function showErr(id,msg){document.getElementById(id).innerHTML=msg?`<div class="err">${esc(msg)}</div>`:""}
+async function analyze(){try{showErr("actionErr","");const ticketId=parseInt(document.getElementById("ticketId").value,10); if(!ticketId){throw new Error("Enter ticket id")} const post_note=document.getElementById("postNote").checked; await api("/api/requests","POST",{ticket_id:ticketId,post_note}); await loadRequests();}catch(e){showErr("actionErr",e.message)}}
 async function analyzeFromInbox(ticketId){document.getElementById("ticketId").value=ticketId; await analyze();}
-async function decide(id,approved){const note=prompt(approved?"Optional approval note":"Denial note","")||""; const post_note=document.getElementById("postNote").checked; await api(`/api/requests/${id}/decision`,"POST",{approved,note,post_note}); await loadRequests(); await loadHistory();}
-async function loadInbox(){const data=await api("/api/inbox"); const c=document.getElementById("inbox"); c.innerHTML=""; for(const t of data.items){const d=document.createElement("div"); d.className="item"; d.innerHTML=`<div class="row"><strong>#${esc(t.id)}</strong><span class="status">${esc(t.status||"unknown")}</span><span class="muted">${esc(t.priority||"no-priority")}</span></div><div><strong>Subject:</strong> ${esc(t.subject||"(no subject)")}</div><div><strong>Description:</strong> ${esc((t.description||"").slice(0,220))}</div><div class="row"><button class="primary" onclick="analyzeFromInbox(${esc(t.id)})">Analyze</button></div>`; c.appendChild(d);} }
-async function loadRequests(){const data=await api("/api/requests"); const c=document.getElementById("requests"); c.innerHTML=""; for(const r of data.items){const p=r.pending||{}; const o=r.outcome||null; const d=document.createElement("div"); d.className="item"; d.innerHTML=`<div class="row"><strong>#${esc(p.ticket_id)}</strong><span class="status">${esc(r.status)}</span><span class="muted">${esc(r.request_id)}</span></div><div><strong>Action:</strong> ${esc(p.action_name)} (${esc(p.method)})</div><div><strong>Summary:</strong> ${esc(p.summary)}</div><div><strong>URI:</strong> ${esc(p.target_uri||"N/A")}</div>${o?`<pre>${esc(JSON.stringify(o,null,2))}</pre>`:""}<div class="row">${r.status==="pending_approval"?`<button class="ok" onclick="decide('${esc(r.request_id)}',true)">Approve</button><button class="no" onclick="decide('${esc(r.request_id)}',false)">Deny</button>`:""}</div>`; c.appendChild(d);} }
-async function loadHistory(){const data=await api("/api/history"); document.getElementById("history").innerHTML=`<pre>${esc(JSON.stringify(data.items,null,2))}</pre>`;}
-async function createUser(){const username=document.getElementById("newUsername").value; const password=document.getElementById("newPassword").value; const role=document.getElementById("newRole").value; await api("/api/admin/users","POST",{username,password,role}); await loadUsers(); alert("User created");}
-async function loadUsers(){const el=document.getElementById("users"); if(!el) return; const data=await api("/api/admin/users"); el.innerHTML=`<pre>${esc(JSON.stringify(data.items,null,2))}</pre>`;}
+async function decide(id,approved){try{showErr("reqErr","");const note=prompt(approved?"Optional approval note":"Denial note","")||""; const post_note=document.getElementById("postNote").checked; await api(`/api/requests/${id}/decision`,"POST",{approved,note,post_note}); await loadRequests(); await loadHistory();}catch(e){showErr("reqErr",e.message)}}
+async function loadInbox(){try{showErr("inboxErr","");const data=await api("/api/inbox"); const c=document.getElementById("inbox"); c.innerHTML=""; if(!data.items||!data.items.length){c.innerHTML="<div class='muted'>No tickets returned from list endpoint.</div>"} for(const t of data.items){const d=document.createElement("div"); d.className="item"; d.innerHTML=`<div class="row"><strong>#${esc(t.id)}</strong><span class="status">${esc(t.status||"unknown")}</span><span class="muted">${esc(t.priority||"no-priority")}</span><span class="sp"></span><button class="primary" onclick="analyzeFromInbox(${esc(t.id)})">Analyze</button></div><div><strong>${esc(t.subject||"(no subject)")}</strong></div><div class="muted">${esc((t.description||"").slice(0,240))}</div>`; c.appendChild(d);} }catch(e){showErr("inboxErr",e.message)}}
+async function loadInboxDebug(){try{const d=await api("/api/inbox/debug"); showErr("inboxErr",""); document.getElementById("inboxErr").innerHTML=`<pre>${esc(JSON.stringify(d,null,2))}</pre>`;}catch(e){showErr("inboxErr",e.message)}}
+async function loadRequests(){try{showErr("reqErr","");const data=await api("/api/requests"); const c=document.getElementById("requests"); c.innerHTML=""; for(const r of data.items){const p=r.pending||{}; const o=r.outcome||null; const d=document.createElement("div"); d.className="item"; d.innerHTML=`<div class="row"><strong>#${esc(p.ticket_id)}</strong><span class="status">${esc(r.status)}</span><span class="muted">${esc(r.request_id)}</span></div><div><strong>Action:</strong> ${esc(p.action_name)} (${esc(p.method)})</div><div class="muted">${esc(p.summary||"")}</div><div class="muted">URI: ${esc(p.target_uri||"N/A")}</div>${o?`<pre>${esc(JSON.stringify(o,null,2))}</pre>`:""}<div class="row">${r.status==="pending_approval"?`<button class="ok" onclick="decide('${esc(r.request_id)}',true)">Approve</button><button class="no" onclick="decide('${esc(r.request_id)}',false)">Deny</button>`:""}</div>`; c.appendChild(d);} }catch(e){showErr("reqErr",e.message)}}
+async function loadHistory(){try{const data=await api("/api/history"); document.getElementById("history").innerHTML=`<pre>${esc(JSON.stringify(data.items,null,2))}</pre>`;}catch(e){showErr("actionErr",e.message)}}
+async function createUser(){try{showErr("userErr","");const username=document.getElementById("newUsername").value; const password=document.getElementById("newPassword").value; const role=document.getElementById("newRole").value; await api("/api/admin/users","POST",{username,password,role}); await loadUsers(); alert("User created")}catch(e){showErr("userErr",e.message)}}
+async function loadUsers(){const el=document.getElementById("users"); if(!el) return; try{const data=await api("/api/admin/users"); el.innerHTML=`<pre>${esc(JSON.stringify(data.items,null,2))}</pre>`;}catch(e){showErr("userErr",e.message)}}
 loadInbox(); loadRequests(); loadHistory(); loadUsers(); setInterval(loadInbox,20000); setInterval(loadRequests,20000);
 </script></body></html>"""
 
@@ -394,6 +422,14 @@ def create_app(
     @_login_required
     def api_inbox() -> Response:
         return jsonify({"items": state.inbox()})
+
+    @app.get("/api/inbox/debug")
+    @_login_required
+    def api_inbox_debug() -> tuple[Response, int] | Response:
+        try:
+            return jsonify(state.inbox_debug())
+        except Exception as exc:  # noqa: BLE001
+            return _json_error(str(exc))
 
     @app.get("/api/requests")
     @_login_required
