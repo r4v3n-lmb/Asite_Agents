@@ -246,6 +246,68 @@ class DashboardState:
     def inbox_debug(self) -> dict[str, Any]:
         return self.workflow.gendesk.inbox_debug(limit=5)
 
+    def ticket_summary(self, days: int = 30) -> dict[str, Any]:
+        tickets = self.workflow.gendesk.list_tickets(limit=max(self.inbox_limit, 100))
+        now = datetime.now(UTC)
+        done_statuses = {"closed", "resolved", "done", "solved", "completed"}
+        active = 0
+        done = 0
+        status_counts: dict[str, int] = {}
+        by_day: dict[str, int] = {}
+        filtered = 0
+
+        for ticket in tickets:
+            raw = ticket.raw or {}
+            dt = self._parse_ticket_datetime(raw)
+            if dt is not None:
+                age_days = (now - dt).days
+                if age_days > days:
+                    continue
+            filtered += 1
+            status = str((ticket.status or "unknown")).strip().lower()
+            status_counts[status] = status_counts.get(status, 0) + 1
+            if status in done_statuses:
+                done += 1
+            else:
+                active += 1
+            if dt is not None:
+                k = dt.strftime("%Y-%m-%d")
+                by_day[k] = by_day.get(k, 0) + 1
+
+        trend = [{"date": k, "count": by_day[k]} for k in sorted(by_day.keys())]
+        return {
+            "window_days": days,
+            "total": filtered,
+            "active": active,
+            "done": done,
+            "status_counts": status_counts,
+            "trend": trend,
+        }
+
+    @staticmethod
+    def _parse_ticket_datetime(raw: dict[str, Any]) -> datetime | None:
+        candidates = [
+            raw.get("updated_at"),
+            raw.get("created_at"),
+            raw.get("updatedAt"),
+            raw.get("createdAt"),
+            raw.get("date"),
+        ]
+        for value in candidates:
+            if not value or not isinstance(value, str):
+                continue
+            v = value.strip()
+            try:
+                if v.endswith("Z"):
+                    v = v[:-1] + "+00:00"
+                dt = datetime.fromisoformat(v)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=UTC)
+                return dt.astimezone(UTC)
+            except ValueError:
+                continue
+        return None
+
     def history(self, limit: int = 200) -> list[dict[str, Any]]:
         if not self.audit_path.exists():
             return []
@@ -286,7 +348,7 @@ DASHBOARD_HTML = """<!doctype html>
 .top{height:64px;display:flex;align-items:center;gap:14px;padding:0 22px;background:rgba(14,14,14,.94);position:sticky;top:0;z-index:10}
 .brand{font-weight:800;letter-spacing:-.03em;font-size:22px}.brand span{color:var(--primary)}
 .layout{display:grid;grid-template-columns:250px 1fr;min-height:calc(100vh - 64px)}aside{background:var(--surface-low);padding:18px 14px}
-.nav{display:grid;gap:8px;margin-top:12px}.nav a{color:var(--muted);text-decoration:none;padding:10px 12px;border-radius:12px;background:transparent}.nav a.active{color:var(--on);background:var(--surface)}
+.nav{display:grid;gap:8px;margin-top:12px}.nav button{text-align:left;color:var(--muted);text-decoration:none;padding:10px 12px;border-radius:12px;background:transparent;border:0}.nav button.active{color:var(--on);background:var(--surface)}
 main{padding:20px;display:grid;gap:16px}.grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}.card{background:var(--surface);padding:16px;border-radius:16px}
 .card.soft{background:var(--surface-low)}.glass{background:rgba(37,38,38,.7);backdrop-filter:blur(12px)}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.sp{flex:1}.muted{color:var(--muted);font-size:12px}
@@ -299,13 +361,43 @@ button{cursor:pointer;background:var(--surface-hi);color:var(--on)}
 .status{display:inline-block;padding:2px 9px;border-radius:999px;background:rgba(72,72,72,.3);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
 .err{padding:10px;border-radius:10px;background:rgba(127,41,39,.45);color:#ffb5af;margin-top:8px}
 pre{background:#0b0b0b;color:#b8d8ea;padding:10px;border-radius:10px;max-height:210px;overflow:auto;font-size:12px}
-a{color:var(--primary)}
+a{color:var(--primary)} .metric{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:10px}
+.metric .item{margin-top:0}.kpi{font-size:28px;font-weight:800}
+table{width:100%;border-collapse:separate;border-spacing:0 8px}.tr{background:var(--surface-hi)}
+td,th{padding:10px 12px;text-align:left;font-size:13px}.hidden{display:none}
 @media (max-width:1060px){.layout{grid-template-columns:1fr}aside{display:none}.grid{grid-template-columns:1fr}}
 </style></head><body>
-<header class="top"><div class="brand">Midnight <span>Architect</span></div><div class="muted">Asite Control Plane</div><div class="sp"></div><div class="muted">User: {{username}} ({{role}})</div><a href="/logout">Logout</a></header>
+<header class="top"><div class="brand">Asite <span>Agent</span></div><div class="muted">Control Plane</div><div class="sp"></div><div class="muted">User: {{username}} ({{role}})</div><a href="/logout">Logout</a></header>
 <div class="layout">
-<aside><div class="muted" style="letter-spacing:.2em;text-transform:uppercase">Admin Console</div><nav class="nav"><a class="active" href="#">Overview</a><a href="#">Helpdesk</a><a href="#">Actions</a><a href="#">History</a></nav></aside>
+<aside><div class="muted" style="letter-spacing:.2em;text-transform:uppercase">Admin Console</div><nav class="nav">
+  <button class="active" data-view="dashboard" onclick="switchView('dashboard',this)">Dashboard</button>
+  <button data-view="helpdesk" onclick="switchView('helpdesk',this)">Helpdesk</button>
+  <button data-view="actions" onclick="switchView('actions',this)">Actions</button>
+  <button data-view="history" onclick="switchView('history',this)">History</button>
+  {% if role == "admin" %}<button data-view="users" onclick="switchView('users',this)">Users</button>{% endif %}
+</nav></aside>
 <main>
+  <section id="view-dashboard">
+    <section class="card soft">
+      <div class="row"><h2 style="margin:0">Ticket Analytics Dashboard</h2><span class="sp"></span>
+        <label class="muted">Window:
+          <select id="summaryDays" onchange="loadSummary()"><option value="7">7d</option><option value="30" selected>30d</option><option value="90">90d</option></select>
+        </label>
+        <button class="primary" onclick="loadSummary()">Refresh</button>
+      </div>
+      <div id="dashErr"></div>
+      <div class="metric">
+        <div class="item"><div class="muted">Total Tickets</div><div class="kpi" id="kpiTotal">-</div></div>
+        <div class="item"><div class="muted">Active</div><div class="kpi" id="kpiActive">-</div></div>
+        <div class="item"><div class="muted">Done</div><div class="kpi" id="kpiDone">-</div></div>
+        <div class="item"><div class="muted">Done Rate</div><div class="kpi" id="kpiRate">-</div></div>
+      </div>
+      <h3>Status Breakdown</h3><div id="statusBreakdown"></div>
+      <h3>Daily Trend</h3><div id="trendTable"></div>
+    </section>
+  </section>
+
+  <section id="view-helpdesk" class="hidden">
   <section class="grid">
     <div class="card soft">
       <div class="row"><h2 style="margin:0">Helpdesk Tickets</h2><span class="sp"></span><button class="primary" onclick="loadInbox()">Refresh</button><button class="warn" onclick="loadInboxDebug()">Debug Pull</button><label class="muted"><input type="checkbox" id="postNote" checked/> Post note back</label></div>
@@ -318,9 +410,11 @@ a{color:var(--primary)}
       <div id="actionErr"></div>
       <h3 style="margin:14px 0 6px">Request History</h3><div id="history"></div>
     </div>
-  </section>
+  </section></section>
+
+  <section id="view-actions" class="hidden">
   {% if role == "admin" %}
-  <section class="card">
+  <section class="card hidden" id="usersInline">
     <h2 style="margin:0 0 8px">User Access</h2>
     <div class="row"><input id="newUsername" placeholder="New username"/><input id="newPassword" type="password" placeholder="Temp password (min 10 chars)"/><select id="newRole"><option value="operator">operator</option><option value="admin">admin</option></select><button class="primary" onclick="createUser()">Create User</button></div>
     <div id="userErr"></div><div id="users"></div>
@@ -330,6 +424,10 @@ a{color:var(--primary)}
     <div class="row"><h2 style="margin:0">Action Requests</h2><span class="sp"></span><button class="primary" onclick="loadRequests()">Refresh</button></div>
     <div id="reqErr"></div><div id="requests"></div>
   </section>
+  </section>
+
+  <section id="view-history" class="hidden"><section class="card"><h2 style="margin:0 0 8px">History</h2><div id="historyWide"></div></section></section>
+  {% if role == "admin" %}<section id="view-users" class="hidden"><section class="card"><h2 style="margin:0 0 8px">User Access</h2><div class="row"><input id="newUsername2" placeholder="New username"/><input id="newPassword2" type="password" placeholder="Temp password (min 10 chars)"/><select id="newRole2"><option value="operator">operator</option><option value="admin">admin</option></select><button class="primary" onclick="createUserAlt()">Create User</button></div><div id="userErr2"></div><div id="users2"></div></section></section>{% endif %}
 </main></div>
 <script>
 async function api(path, method="GET", body=null){
@@ -341,6 +439,30 @@ async function api(path, method="GET", body=null){
 }
 function esc(s){return (s||"").toString().replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))}
 function showErr(id,msg){document.getElementById(id).innerHTML=msg?`<div class="err">${esc(msg)}</div>`:""}
+function switchView(view,btn){
+  document.querySelectorAll('main > section[id^="view-"]').forEach(s=>s.classList.add('hidden'));
+  const target=document.getElementById('view-'+view); if(target) target.classList.remove('hidden');
+  document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active')); if(btn) btn.classList.add('active');
+  if(view==='history'){loadHistoryWide()}
+  if(view==='users'){loadUsersAlt()}
+}
+async function loadSummary(){
+  try{
+    showErr("dashErr","");
+    const days=parseInt(document.getElementById("summaryDays").value,10)||30;
+    const data=await api(`/api/tickets/summary?days=${days}`);
+    const total=data.total||0, active=data.active||0, done=data.done||0;
+    document.getElementById("kpiTotal").textContent=total;
+    document.getElementById("kpiActive").textContent=active;
+    document.getElementById("kpiDone").textContent=done;
+    document.getElementById("kpiRate").textContent= total? Math.round((done/total)*100)+"%":"0%";
+    const sb=document.getElementById("statusBreakdown");
+    const statuses=data.status_counts||{};
+    sb.innerHTML=Object.keys(statuses).length?Object.entries(statuses).map(([k,v])=>`<div class="item row"><span class="status">${esc(k)}</span><span class="sp"></span><strong>${esc(v)}</strong></div>`).join(""):"<div class='muted'>No status data.</div>";
+    const trend=data.trend||[];
+    document.getElementById("trendTable").innerHTML=trend.length?`<table><thead><tr><th>Date</th><th>Tickets</th></tr></thead><tbody>${trend.map(x=>`<tr class='tr'><td>${esc(x.date)}</td><td>${esc(x.count)}</td></tr>`).join("")}</tbody></table>`:"<div class='muted'>No trend data.</div>";
+  }catch(e){showErr("dashErr",e.message)}
+}
 async function analyze(){try{showErr("actionErr","");const ticketId=parseInt(document.getElementById("ticketId").value,10); if(!ticketId){throw new Error("Enter ticket id")} const post_note=document.getElementById("postNote").checked; await api("/api/requests","POST",{ticket_id:ticketId,post_note}); await loadRequests();}catch(e){showErr("actionErr",e.message)}}
 async function analyzeFromInbox(ticketId){document.getElementById("ticketId").value=ticketId; await analyze();}
 async function decide(id,approved){try{showErr("reqErr","");const note=prompt(approved?"Optional approval note":"Denial note","")||""; const post_note=document.getElementById("postNote").checked; await api(`/api/requests/${id}/decision`,"POST",{approved,note,post_note}); await loadRequests(); await loadHistory();}catch(e){showErr("reqErr",e.message)}}
@@ -348,9 +470,12 @@ async function loadInbox(){try{showErr("inboxErr","");const data=await api("/api
 async function loadInboxDebug(){try{const d=await api("/api/inbox/debug"); showErr("inboxErr",""); document.getElementById("inboxErr").innerHTML=`<pre>${esc(JSON.stringify(d,null,2))}</pre>`;}catch(e){showErr("inboxErr",e.message)}}
 async function loadRequests(){try{showErr("reqErr","");const data=await api("/api/requests"); const c=document.getElementById("requests"); c.innerHTML=""; for(const r of data.items){const p=r.pending||{}; const o=r.outcome||null; const d=document.createElement("div"); d.className="item"; d.innerHTML=`<div class="row"><strong>#${esc(p.ticket_id)}</strong><span class="status">${esc(r.status)}</span><span class="muted">${esc(r.request_id)}</span></div><div><strong>Action:</strong> ${esc(p.action_name)} (${esc(p.method)})</div><div class="muted">${esc(p.summary||"")}</div><div class="muted">URI: ${esc(p.target_uri||"N/A")}</div>${o?`<pre>${esc(JSON.stringify(o,null,2))}</pre>`:""}<div class="row">${r.status==="pending_approval"?`<button class="ok" onclick="decide('${esc(r.request_id)}',true)">Approve</button><button class="no" onclick="decide('${esc(r.request_id)}',false)">Deny</button>`:""}</div>`; c.appendChild(d);} }catch(e){showErr("reqErr",e.message)}}
 async function loadHistory(){try{const data=await api("/api/history"); document.getElementById("history").innerHTML=`<pre>${esc(JSON.stringify(data.items,null,2))}</pre>`;}catch(e){showErr("actionErr",e.message)}}
+async function loadHistoryWide(){try{const data=await api("/api/history"); document.getElementById("historyWide").innerHTML=`<pre>${esc(JSON.stringify(data.items,null,2))}</pre>`;}catch(e){document.getElementById("historyWide").innerHTML=`<div class='err'>${esc(e.message)}</div>`}}
 async function createUser(){try{showErr("userErr","");const username=document.getElementById("newUsername").value; const password=document.getElementById("newPassword").value; const role=document.getElementById("newRole").value; await api("/api/admin/users","POST",{username,password,role}); await loadUsers(); alert("User created")}catch(e){showErr("userErr",e.message)}}
 async function loadUsers(){const el=document.getElementById("users"); if(!el) return; try{const data=await api("/api/admin/users"); el.innerHTML=`<pre>${esc(JSON.stringify(data.items,null,2))}</pre>`;}catch(e){showErr("userErr",e.message)}}
-loadInbox(); loadRequests(); loadHistory(); loadUsers(); setInterval(loadInbox,20000); setInterval(loadRequests,20000);
+async function createUserAlt(){try{showErr("userErr2","");const username=document.getElementById("newUsername2").value; const password=document.getElementById("newPassword2").value; const role=document.getElementById("newRole2").value; await api("/api/admin/users","POST",{username,password,role}); await loadUsersAlt(); alert("User created")}catch(e){showErr("userErr2",e.message)}}
+async function loadUsersAlt(){const el=document.getElementById("users2"); if(!el) return; try{const data=await api("/api/admin/users"); el.innerHTML=`<pre>${esc(JSON.stringify(data.items,null,2))}</pre>`;}catch(e){showErr("userErr2",e.message)}}
+loadSummary(); loadInbox(); loadRequests(); loadHistory(); loadUsers(); setInterval(loadInbox,20000); setInterval(loadRequests,20000);
 </script></body></html>"""
 
 
@@ -420,8 +545,11 @@ def create_app(
 
     @app.get("/api/inbox")
     @_login_required
-    def api_inbox() -> Response:
-        return jsonify({"items": state.inbox()})
+    def api_inbox() -> tuple[Response, int] | Response:
+        try:
+            return jsonify({"items": state.inbox()})
+        except Exception as exc:  # noqa: BLE001
+            return _json_error(str(exc), 502)
 
     @app.get("/api/inbox/debug")
     @_login_required
@@ -430,6 +558,16 @@ def create_app(
             return jsonify(state.inbox_debug())
         except Exception as exc:  # noqa: BLE001
             return _json_error(str(exc))
+
+    @app.get("/api/tickets/summary")
+    @_login_required
+    def api_ticket_summary() -> tuple[Response, int] | Response:
+        try:
+            days = int(request.args.get("days", "30"))
+            days = min(max(days, 1), 365)
+            return jsonify(state.ticket_summary(days=days))
+        except Exception as exc:  # noqa: BLE001
+            return _json_error(str(exc), 502)
 
     @app.get("/api/requests")
     @_login_required
