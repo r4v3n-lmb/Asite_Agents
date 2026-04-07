@@ -134,6 +134,22 @@ Optional persistence paths (recommended):
 - `DASHBOARD_USER_DB=/var/data/users.db`
 - `DASHBOARD_AUDIT_LOG=/var/data/dashboard_audit.jsonl`
 
+Slack notifications (optional):
+- `SLACK_WEBHOOK_URL` (Incoming Webhook URL from Slack app)
+- `SLACK_CHANNEL` (optional override, e.g. `#asite-agent-approvals`)
+- `SLACK_NOTIFY_DECISIONS` (`true` to also notify approve/deny outcomes)
+- `DASHBOARD_PUBLIC_BASE_URL` (used in Slack message review link)
+- `SLACK_SIGNING_SECRET` (required for secure Slack button callbacks)
+
+Slack Approve/Decline buttons:
+1. In your Slack app, enable **Interactivity & Shortcuts**.
+2. Set Request URL to:
+   `https://<your-render-domain>/slack/actions`
+3. Use the same app to create Incoming Webhook and set `SLACK_WEBHOOK_URL`.
+4. Set `SLACK_SIGNING_SECRET` from Slack app **Basic Information**.
+
+When a new action request is created, Slack message buttons can approve/decline directly and continue the workflow.
+
 If you want persistent user accounts and audit across deploys, attach a persistent disk and use `/var/data/...` paths.
 
 ## Behavior Notes

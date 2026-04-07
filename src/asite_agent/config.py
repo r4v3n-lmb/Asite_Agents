@@ -27,6 +27,11 @@ class Settings:
     asite_password: str
     pdf_path: Path
     dry_run: bool
+    slack_webhook_url: str
+    slack_channel: str
+    slack_notify_decisions: bool
+    slack_signing_secret: str
+    dashboard_public_base_url: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -55,4 +60,9 @@ class Settings:
             pdf_path=base_dir
             / os.getenv("ASITE_API_OVERVIEW_PDF", "Asite-API_Services_Overview.pdf"),
             dry_run=_to_bool(os.getenv("DRY_RUN"), True),
+            slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL", ""),
+            slack_channel=os.getenv("SLACK_CHANNEL", ""),
+            slack_notify_decisions=_to_bool(os.getenv("SLACK_NOTIFY_DECISIONS"), False),
+            slack_signing_secret=os.getenv("SLACK_SIGNING_SECRET", ""),
+            dashboard_public_base_url=os.getenv("DASHBOARD_PUBLIC_BASE_URL", ""),
         )

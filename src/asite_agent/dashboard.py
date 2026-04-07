@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import sqlite3
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import parse_qs
 
 from flask import Flask, Response, jsonify, redirect, render_template_string, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -17,6 +21,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from .asite_client import AsiteClient
 from .config import Settings
 from .pdf_catalog import load_or_build_catalog
+from .slack_notifier import SlackNotifier
 from .ticket_sources import GendeskClient
 from .workflow import AsiteSupportWorkflow, PendingApprovalRequest
 
@@ -119,10 +124,21 @@ class UserStore:
 
 
 class DashboardState:
-    def __init__(self, workflow: AsiteSupportWorkflow, audit_path: Path, inbox_limit: int = 25) -> None:
+    def __init__(
+        self,
+        workflow: AsiteSupportWorkflow,
+        audit_path: Path,
+        inbox_limit: int = 25,
+        slack: SlackNotifier | None = None,
+        notify_decisions: bool = False,
+        public_base_url: str = "",
+    ) -> None:
         self.workflow = workflow
         self.audit_path = audit_path
         self.inbox_limit = inbox_limit
+        self.slack = slack or SlackNotifier("")
+        self.notify_decisions = notify_decisions
+        self.public_base_url = public_base_url.rstrip("/")
         self.requests: dict[str, RequestRecord] = {}
 
     def _append_audit(self, event: dict[str, Any]) -> None:
@@ -150,6 +166,7 @@ class DashboardState:
                 "status": status,
             }
         )
+        self._notify_request_created(record)
         return record
 
     def decide(self, request_id: str, approved: bool, note: str, post_note: bool) -> RequestRecord:
@@ -180,7 +197,44 @@ class DashboardState:
                 "note": note,
             }
         )
+        if self.notify_decisions:
+            self._notify_request_decided(record=record, approved=approved)
         return record
+
+    def _notify_request_created(self, record: RequestRecord) -> None:
+        if not self.slack.enabled:
+            return
+        p = record.pending
+        review_link = f"{self.public_base_url}/" if self.public_base_url else "https://example.com"
+        try:
+            self.slack.send_action_request(
+                request_id=record.request_id,
+                ticket_id=int(p.get("ticket_id") or 0),
+                subject=str(p.get("ticket_subject", "")),
+                action_name=str(p.get("action_name", "")),
+                method=str(p.get("method", "")),
+                status=record.status,
+                review_url=review_link,
+            )
+        except Exception:
+            return
+
+    def _notify_request_decided(self, record: RequestRecord, approved: bool) -> None:
+        if not self.slack.enabled:
+            return
+        p = record.pending
+        status_word = "APPROVED" if approved else "DENIED"
+        text = (
+            f":white_check_mark: *Asite Action {status_word}*\n"
+            f"- Ticket: #{p.get('ticket_id')}\n"
+            f"- Action: `{p.get('action_name')}`\n"
+            f"- Final Status: {record.status}\n"
+            f"- Request ID: `{record.request_id}`"
+        )
+        try:
+            self.slack.send_text(text)
+        except Exception:
+            return
 
     def list_requests(self) -> list[dict[str, Any]]:
         return [asdict(r) for r in sorted(self.requests.values(), key=lambda x: x.created_at, reverse=True)]
@@ -303,6 +357,7 @@ def create_app(
     user_store: UserStore,
     state: DashboardState,
     secret_key: str,
+    slack_signing_secret: str = "",
 ) -> Flask:
     app = Flask(__name__)
     app.secret_key = secret_key
@@ -399,6 +454,65 @@ def create_app(
         except Exception as exc:  # noqa: BLE001
             return _json_error(str(exc))
 
+    @app.post("/slack/actions")
+    def slack_actions() -> tuple[Response, int] | Response:
+        if not slack_signing_secret:
+            return _json_error("Slack signing secret not configured", 400)
+        raw_body = request.get_data(cache=False) or b""
+        timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
+        signature = request.headers.get("X-Slack-Signature", "")
+        if not timestamp or not signature:
+            return _json_error("Missing Slack signature headers", 401)
+        try:
+            ts = int(timestamp)
+        except ValueError:
+            return _json_error("Invalid timestamp", 401)
+        if abs(int(time.time()) - ts) > 60 * 5:
+            return _json_error("Stale Slack request", 401)
+
+        base = f"v0:{timestamp}:{raw_body.decode('utf-8')}".encode("utf-8")
+        expected = "v0=" + hmac.new(
+            slack_signing_secret.encode("utf-8"), base, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            return _json_error("Invalid Slack signature", 401)
+
+        form = parse_qs(raw_body.decode("utf-8"))
+        payload_raw = (form.get("payload") or ["{}"])[0]
+        payload = json.loads(payload_raw)
+        actions = payload.get("actions") or []
+        if not actions:
+            return jsonify({"text": "No action found"})
+        action = actions[0]
+        value_raw = action.get("value", "{}")
+        value = json.loads(value_raw)
+        request_id = str(value.get("request_id", ""))
+        approved = bool(value.get("approved", False))
+        post_note = bool(value.get("post_note", False))
+
+        user = (payload.get("user") or {}).get("username") or (payload.get("user") or {}).get("name") or "slack-user"
+        note = f"Decision via Slack by {user}"
+        try:
+            rec = state.decide(
+                request_id=request_id, approved=approved, note=note, post_note=post_note
+            )
+            return jsonify(
+                {
+                    "response_type": "ephemeral",
+                    "text": (
+                        f"Request `{request_id}` processed. "
+                        f"Status: `{rec.status}`."
+                    ),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(
+                {
+                    "response_type": "ephemeral",
+                    "text": f"Unable to process request `{request_id}`: {exc}",
+                }
+            )
+
     return app
 
 
@@ -451,6 +565,9 @@ def main() -> None:
         workflow=workflow,
         audit_path=Path(args.audit_log),
         inbox_limit=settings.gendesk_ticket_list_limit,
+        slack=SlackNotifier(settings.slack_webhook_url, settings.slack_channel),
+        notify_decisions=settings.slack_notify_decisions,
+        public_base_url=settings.dashboard_public_base_url,
     )
 
     user_store = UserStore(Path(args.user_db))
@@ -466,7 +583,13 @@ def main() -> None:
     secret_key = os.getenv("DASHBOARD_SECRET_KEY", "")
     if not secret_key:
         raise RuntimeError("DASHBOARD_SECRET_KEY is required")
-    app = create_app(workflow=workflow, user_store=user_store, state=state, secret_key=secret_key)
+    app = create_app(
+        workflow=workflow,
+        user_store=user_store,
+        state=state,
+        secret_key=secret_key,
+        slack_signing_secret=settings.slack_signing_secret,
+    )
     print(f"Dashboard running at http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, debug=False)
 
